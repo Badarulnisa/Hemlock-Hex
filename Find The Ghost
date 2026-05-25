@@ -1,0 +1,201 @@
+CTF Writeup  FIND THE GHOST
+Event: Khelo CTF
+Category: Forensics
+Points: 1500
+Flag: KH3L0{44kh1R_44nDAr_GH0S_H1_G44Y_B3T4}
+
+-----------------------------------------------------------------------------------------
+
+Challenge Description
+
+"Multiple hidden layers have been embedded inside different formats including images,
+archives, audio, documents, and encrypted data. Your mission is to analyze the file
+carefully, uncover hidden content step-by-step, and reconstruct the final secret."
+
+Given file: challenge.jpg
+
+--------------------------------------------------------------------------------------------
+
+Overview
+
+This is a multi-layer steganography chain. Each layer hides the next clue inside a
+different file format. The full chain is:
+
+    challenge.jpg
+     └── embedded.zip (polyglot JPEG+ZIP)
+          ├── combo.png
+          │    ├── hidden JPEG at offset 4258
+          │    └── hidden.wav appended after IEND chunk
+          └── deeper.zip (password: ghost)
+               ├── mystery.pdf       <- clue source
+               ├── carrier.jpg       -> steghide (phantom) -> qr.png
+               └── final.jpg         -> steghide (spectre)  -> flag.enc
+                                                                   |
+                                    qr.png -> base64 -> ROT13 -> AES key
+                                                                   |
+                                                              KH3L0{...}
+
+--------------------------------------------------------------------------------------------
+
+Step 1 - Recon on challenge.jpg
+
+    file challenge.jpg
+    strings challenge.jpg | head -50
+
+file confirms it's a valid JPEG. strings immediately reveals two things:
+
+1. Filenames deeper.zip and carrier.jpg embedded inside — sign of a polyglot file.
+2. An EXIF XPComment field containing UTF-16LE encoded data.
+
+Decode the XPComment:
+
+    b = b'K\x00H\x003\x00L\x000\x00{\x004\x00c\x00 \x006\x001\x00...'
+    print(b.decode('utf-16-le'))
+    # KH3L0{4c 61 79 65 72 32 20 69 6e 73 69 6d 65}
+
+Decode the hex inside the braces:
+
+    bytes.fromhex('4c6179657232...')
+    # b'Layer2 inside'
+
+This is a hint, not the flag — it tells you to dig deeper into layer 2.
+
+Remember: JPEG files can carry a full ZIP archive appended after the EOI marker (0xFFD9).
+This makes a valid JPEG that is also a valid ZIP — called a polyglot file.
+
+--------------------------------------------------------------------------------------------
+
+Step 2 - Extract the embedded ZIP
+
+    with open('challenge.jpg', 'rb') as f:
+        data = f.read()
+
+    pk_offset = data.find(b'PK\x03\x04')   # 0xc9c = 3228
+    with open('embedded.zip', 'wb') as f:
+        f.write(data[pk_offset:])
+
+    unzip embedded.zip
+    # extracts: deeper.zip, combo.png
+
+--------------------------------------------------------------------------------------------
+
+Step 3 - Analyze combo.png
+
+    file combo.png
+    # PNG image data, 400x400, 8-bit colormap
+
+It looks like a plain image, but two things are hidden inside:
+
+3a. Embedded JPEG at offset 4258
+
+    data = open('combo.png', 'rb').read()
+    jpg_start = data.find(b'\xff\xd8\xff')
+    jpg_end   = data.find(b'\xff\xd9', jpg_start) + 2
+    open('hidden.jpg', 'wb').write(data[jpg_start:jpg_end])
+
+3b. WAV audio appended after IEND chunk
+
+    iend = data.rfind(b'IEND')
+    open('hidden.wav', 'wb').write(data[iend+8:])
+    # RIFF WAV, 16-bit mono, 22050 Hz
+
+Neither hidden.jpg nor hidden.wav directly contain the flag — they are decoys / extra
+layers included to increase complexity.
+
+Remember: PNG files have a defined end chunk (IEND). Any bytes after it are ignored by
+image viewers but are still present in the file — a common place to hide data.
+
+--------------------------------------------------------------------------------------------
+
+Step 4 - Open deeper.zip (password: ghost)
+
+    unzip -P ghost deeper.zip
+    # extracts: carrier.jpg, mystery.pdf, final.jpg
+
+The password "ghost" matches the challenge title "FIND THE GHOST" and was findable by
+trying theme-related words.
+
+--------------------------------------------------------------------------------------------
+
+Step 5 - Read mystery.pdf for clues
+
+    import fitz
+    doc = fitz.open('mystery.pdf')
+    print(doc[0].get_text())
+    # "Welcome to the deeper layers.
+    #  A wise phantom once carried a code.
+    #  A haunting spectre guards the final door."
+
+Two steghide passwords are hidden in plain English here:
+    phantom -> carrier.jpg
+    spectre -> final.jpg
+
+Remember: CTF PDF files often contain clues in their visible text, not just metadata.
+Always extract and read the text before moving on.
+
+--------------------------------------------------------------------------------------------
+
+Step 6 - Steghide on carrier.jpg -> QR code
+
+    steghide extract -sf carrier.jpg -p phantom -f
+    # wrote extracted data to "qr.png"
+
+Decode the QR code:
+
+    from pyzbar.pyzbar import decode
+    from PIL import Image
+    print(decode(Image.open('qr.png'))[0].data)
+    # b'ZmhjcmVfZnJwZXJnX25yZg=='
+
+Decode base64:
+
+    import base64
+    print(base64.b64decode('ZmhjcmVfZnJwZXJnX25yZg==').decode())
+    # 'fhcre_frperg_nrf'
+
+Apply ROT13:
+
+    import codecs
+    print(codecs.encode('fhcre_frperg_nrf', 'rot13'))
+    # 'super_secret_aes'
+
+This is the AES decryption key.
+
+Remember: When you see random-looking lowercase strings with underscores, always try
+ROT13. It's one of the most common simple obfuscation layers in CTFs.
+
+--------------------------------------------------------------------------------------------
+
+Step 7 - Steghide on final.jpg -> encrypted payload
+
+    steghide extract -sf final.jpg -p spectre -f
+    # wrote extracted data to "flag.enc"
+
+    file flag.enc
+    # openssl enc'd data with salted password
+
+--------------------------------------------------------------------------------------------
+
+Step 8 - Decrypt flag.enc with AES key
+
+    openssl enc -d -aes-256-cbc -in flag.enc -pass pass:super_secret_aes -pbkdf2
+    # KH3L0{44kh1R_44nDAr_GH0S_H1_G44Y_B3T4}
+
+--------------------------------------------------------------------------------------------
+
+Flag
+
+    KH3L0{44kh1R_44nDAr_GH0S_H1_G44Y_B3T4}
+
+--------------------------------------------------------------------------------------------
+
+Tools Used
+
+- file, strings        -- initial recon
+- Python + Pillow      -- EXIF decoding, PNG chunk analysis, hex decoding
+- unzip                -- archive extraction
+- PyMuPDF (fitz)       -- PDF text extraction
+- steghide             -- audio/image steganography extraction
+- pyzbar               -- QR code decoding
+- Python codecs        -- ROT13
+- openssl enc          -- AES-256-CBC decryption

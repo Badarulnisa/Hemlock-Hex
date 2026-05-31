@@ -2,7 +2,7 @@
 
 Hemlock Hex is a CTF team competing across national and international competitions.
 From UCP Kernel Wars and NUST CTF to KubSTU (Russia)
-ITU CTF and Khelo CTF…
+ITU CTF and Khelo CTF, BYU(Birmingham Young University), Hack4Bug.
 
 Specializing in:
 
@@ -18,4 +18,4 @@ Cryptography
 
 IoT security
 
-# Every flag is documented.
+### Every flag is documented.
